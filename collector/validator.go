@@ -3,6 +3,7 @@ package collector
 import (
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/forbole/solana-exporter/types"
 	"github.com/prometheus/client_golang/prometheus"
@@ -124,21 +125,26 @@ func (collector *SolanaValidatorCollector) Collect(ch chan<- prometheus.Metric) 
 	}
 	ch <- prometheus.MustNewConstMetric(collector.Stakedtotal, prometheus.GaugeValue, types.ConvertLamportToSolana(stakedTotal))
 
+	var wg sync.WaitGroup
 	for address := range collector.ValidatorAddresses {
-		if delegators, err := collector.SolanaClient.GetDelegatorsCount(address); err != nil {
-			ch <- prometheus.NewInvalidMetric(collector.ValidatorDelegatorCount, err)
-		} else {
-			ch <- prometheus.MustNewConstMetric(collector.ValidatorDelegatorCount, prometheus.GaugeValue, float64(len(delegators)), address)
-		}
-
-		if rewards, err := collector.SolanaClient.GetInflationReward(address); err != nil {
-			ch <- prometheus.NewInvalidMetric(collector.ValidatorInflationReward, err)
-		} else {
-			for _, reward := range rewards {
-				ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationRewardCurrentEpoch, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address)
-				ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationReward, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address, strconv.FormatUint(reward.Epoch, 10))
+		wg.Add(1)
+		go func(address string) {
+			defer wg.Done()
+			if rewards, err := collector.SolanaClient.GetInflationReward(address); err != nil {
+				ch <- prometheus.NewInvalidMetric(collector.ValidatorInflationReward, err)
+			} else {
+				for _, reward := range rewards {
+					ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationRewardCurrentEpoch, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address)
+					ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationReward, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address, strconv.FormatUint(reward.Epoch, 10))
+				}
 			}
-		}
+			if delegators, err := collector.SolanaClient.GetDelegatorsCount(address); err != nil {
+				ch <- prometheus.NewInvalidMetric(collector.ValidatorDelegatorCount, err)
+			} else {
+				ch <- prometheus.MustNewConstMetric(collector.ValidatorDelegatorCount, prometheus.GaugeValue, float64(len(delegators)), address)
+			}
+		}(address)
 	}
 
+	wg.Wait()
 }
