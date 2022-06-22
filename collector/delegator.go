@@ -17,8 +17,9 @@ type SolanaDelegatorCollector struct {
 	SolanaClient       *types.Client
 	DelegatorAddresses []string
 
-	AvailableBalance         *prometheus.Desc
-	DelegatorInflationReward *prometheus.Desc
+	AvailableBalance                     *prometheus.Desc
+	DelegatorInflationReward             *prometheus.Desc
+	DelegatorInflationRewardCurrentEpoch *prometheus.Desc
 }
 
 func NewSolanaDelegatorCollector(solanaclient *types.Client, delegator_addresses []string) *SolanaDelegatorCollector {
@@ -38,13 +39,19 @@ func NewSolanaDelegatorCollector(solanaclient *types.Client, delegator_addresses
 			[]string{"delegator_address", "epoch"},
 			SOLANA_DENOM_LABEL,
 		),
+		DelegatorInflationRewardCurrentEpoch: prometheus.NewDesc(
+			"solana_delegator_inflation_reward_current_epoch",
+			"Reward earned by delegator by the end of each epoch",
+			[]string{"delegator_address"},
+			SOLANA_DENOM_LABEL,
+		),
 	}
 }
 
 func (collector *SolanaDelegatorCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- collector.AvailableBalance
 	ch <- collector.DelegatorInflationReward
-
+	ch <- collector.DelegatorInflationRewardCurrentEpoch
 }
 
 func (collector *SolanaDelegatorCollector) Collect(ch chan<- prometheus.Metric) {
@@ -64,6 +71,7 @@ func (collector *SolanaDelegatorCollector) Collect(ch chan<- prometheus.Metric) 
 			} else {
 				for _, reward := range rewards {
 					ch <- prometheus.MustNewConstMetric(collector.DelegatorInflationReward, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address, strconv.FormatUint(reward.Epoch, 10))
+					ch <- prometheus.MustNewConstMetric(collector.DelegatorInflationRewardCurrentEpoch, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address)
 				}
 			}
 		}(address)

@@ -12,13 +12,14 @@ type SolanaValidatorCollector struct {
 	SolanaClient       *types.Client
 	ValidatorAddresses map[string]struct{}
 
-	Stakedtotal              *prometheus.Desc
-	ValidatorCommission      *prometheus.Desc
-	ValidatorDelegatorCount  *prometheus.Desc
-	ValidatorEpochCredits    *prometheus.Desc
-	ValidatorInflationReward *prometheus.Desc
-	ValidatorStaked          *prometheus.Desc
-	ValidatorStakedRanking   *prometheus.Desc
+	Stakedtotal                          *prometheus.Desc
+	ValidatorCommission                  *prometheus.Desc
+	ValidatorDelegatorCount              *prometheus.Desc
+	ValidatorEpochCredits                *prometheus.Desc
+	ValidatorInflationReward             *prometheus.Desc
+	ValidatorInflationRewardCurrentEpoch *prometheus.Desc
+	ValidatorStaked                      *prometheus.Desc
+	ValidatorStakedRanking               *prometheus.Desc
 }
 
 func NewSolanaValidatorCollector(solanaClient *types.Client, validator_addresses map[string]struct{}) *SolanaValidatorCollector {
@@ -68,6 +69,12 @@ func NewSolanaValidatorCollector(solanaClient *types.Client, validator_addresses
 			[]string{"validator_address", "epoch"},
 			SOLANA_DENOM_LABEL,
 		),
+		ValidatorInflationRewardCurrentEpoch: prometheus.NewDesc(
+			"solana_validator_inflation_reward_current_epoch",
+			"Reward earned by validator by the end of each epoch",
+			[]string{"validator_address"},
+			SOLANA_DENOM_LABEL,
+		),
 	}
 }
 
@@ -79,6 +86,7 @@ func (collector *SolanaValidatorCollector) Describe(ch chan<- *prometheus.Desc) 
 	ch <- collector.ValidatorStaked
 	ch <- collector.ValidatorStakedRanking
 	ch <- collector.ValidatorInflationReward
+	ch <- collector.ValidatorInflationRewardCurrentEpoch
 }
 
 func (collector *SolanaValidatorCollector) Collect(ch chan<- prometheus.Metric) {
@@ -127,6 +135,7 @@ func (collector *SolanaValidatorCollector) Collect(ch chan<- prometheus.Metric) 
 			ch <- prometheus.NewInvalidMetric(collector.ValidatorInflationReward, err)
 		} else {
 			for _, reward := range rewards {
+				ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationRewardCurrentEpoch, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address)
 				ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationReward, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address, strconv.FormatUint(reward.Epoch, 10))
 			}
 		}
