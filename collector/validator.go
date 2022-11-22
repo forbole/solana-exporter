@@ -1,103 +1,20 @@
 package collector
 
 import (
+	"log"
 	"sort"
 	"strconv"
 	"sync"
 
 	"github.com/forbole/solana-exporter/types"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
-type SolanaValidatorCollector struct {
-	SolanaClient       *types.Client
-	ValidatorAddresses map[string]struct{}
-
-	Stakedtotal                          *prometheus.Desc
-	ValidatorCommission                  *prometheus.Desc
-	ValidatorDelegatorCount              *prometheus.Desc
-	ValidatorEpochCredits                *prometheus.Desc
-	ValidatorInflationReward             *prometheus.Desc
-	ValidatorInflationRewardCurrentEpoch *prometheus.Desc
-	ValidatorStaked                      *prometheus.Desc
-	ValidatorStakedRanking               *prometheus.Desc
-}
-
-func NewSolanaValidatorCollector(solanaClient *types.Client, validator_addresses map[string]struct{}) *SolanaValidatorCollector {
-	return &SolanaValidatorCollector{
-		SolanaClient:       solanaClient,
-		ValidatorAddresses: validator_addresses,
-
-		Stakedtotal: prometheus.NewDesc(
-			"solana_staked_total",
-			"Total activated staked of the network",
-			nil,
-			SOLANA_DENOM_LABEL,
-		),
-		ValidatorCommission: prometheus.NewDesc(
-			"solana_validator_commission_rate",
-			"Commission rate of the validator",
-			[]string{"validator_address"},
-			nil,
-		),
-		ValidatorDelegatorCount: prometheus.NewDesc(
-			"solana_validator_delegators_count",
-			"Number of delegators per validator",
-			[]string{"validator_address"},
-			nil,
-		),
-		ValidatorEpochCredits: prometheus.NewDesc(
-			"solana_validator_epoch_credits",
-			"Credits earned by validator by the end of each epoch",
-			[]string{"validator_address", "epoch"},
-			SOLANA_DENOM_LABEL,
-		),
-		ValidatorStaked: prometheus.NewDesc(
-			"solana_validator_staked",
-			"Activated stake per validator",
-			[]string{"validator_address"},
-			SOLANA_DENOM_LABEL,
-		),
-		ValidatorStakedRanking: prometheus.NewDesc(
-			"solana_validator_staked_ranking",
-			"Activated stake per validator",
-			[]string{"validator_address"},
-			nil,
-		),
-		ValidatorInflationReward: prometheus.NewDesc(
-			"solana_validator_inflation_reward",
-			"Reward earned by validator by the end of each epoch",
-			[]string{"validator_address", "epoch"},
-			SOLANA_DENOM_LABEL,
-		),
-		ValidatorInflationRewardCurrentEpoch: prometheus.NewDesc(
-			"solana_validator_inflation_reward_current_epoch",
-			"Reward earned by validator by the end of each epoch",
-			[]string{"validator_address"},
-			SOLANA_DENOM_LABEL,
-		),
-	}
-}
-
-func (collector *SolanaValidatorCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- collector.Stakedtotal
-	ch <- collector.ValidatorCommission
-	ch <- collector.ValidatorDelegatorCount
-	ch <- collector.ValidatorEpochCredits
-	ch <- collector.ValidatorStaked
-	ch <- collector.ValidatorStakedRanking
-	ch <- collector.ValidatorInflationReward
-	ch <- collector.ValidatorInflationRewardCurrentEpoch
-}
-
-func (collector *SolanaValidatorCollector) Collect(ch chan<- prometheus.Metric) {
+func (collector *SolanaCollector) CollectValidatorStats() {
 	voteAccounts, err := collector.SolanaClient.GetVoteAccounts()
 
 	if err != nil {
-		ch <- prometheus.NewInvalidMetric(collector.Stakedtotal, err)
-		ch <- prometheus.NewInvalidMetric(collector.ValidatorCommission, err)
-		ch <- prometheus.NewInvalidMetric(collector.ValidatorStaked, err)
-		ch <- prometheus.NewInvalidMetric(collector.ValidatorStakedRanking, err)
+		ErrorGauge.WithLabelValues("get_vote_accounts").Inc()
+		log.Print(err)
 	}
 
 	// Sort to get validator ranking.
@@ -110,20 +27,21 @@ func (collector *SolanaValidatorCollector) Collect(ch chan<- prometheus.Metric) 
 		stakedTotal += account.ActivatedStake
 
 		if _, ok := collector.ValidatorAddresses[account.VotePubkey]; ok {
-			ch <- prometheus.MustNewConstMetric(collector.ValidatorCommission, prometheus.GaugeValue, float64(account.Commission), account.VotePubkey)
-			ch <- prometheus.MustNewConstMetric(collector.ValidatorStaked, prometheus.GaugeValue, types.ConvertLamportToSolana(account.ActivatedStake), account.VotePubkey)
-			ch <- prometheus.MustNewConstMetric(collector.ValidatorStakedRanking, prometheus.GaugeValue, float64(index+1), account.VotePubkey)
+			ValidatorCommission.WithLabelValues(account.VotePubkey).Set(float64(account.Commission))
+			ValidatorStaked.WithLabelValues(account.VotePubkey).Set(types.ConvertLamportToSolana(account.ActivatedStake))
+			ValidatorStakedRanking.WithLabelValues(account.VotePubkey).Set(float64(index + 1))
 
 			// Reward handler
 			for _, credits := range account.EpochCredits {
 				// epochCredits: <array> [epoch, credits, previousCredits]
 				epoch := credits[0]
 				earnedCedit := credits[1] - credits[2]
-				ch <- prometheus.MustNewConstMetric(collector.ValidatorEpochCredits, prometheus.GaugeValue, float64(earnedCedit), account.VotePubkey, strconv.Itoa(epoch))
+				ValidatorEpochCredits.WithLabelValues(account.VotePubkey, strconv.Itoa(epoch)).Set(float64(earnedCedit))
 			}
 		}
 	}
-	ch <- prometheus.MustNewConstMetric(collector.Stakedtotal, prometheus.GaugeValue, types.ConvertLamportToSolana(stakedTotal))
+
+	Stakedtotal.WithLabelValues().Set(types.ConvertLamportToSolana(stakedTotal))
 
 	var wg sync.WaitGroup
 	for address := range collector.ValidatorAddresses {
@@ -131,17 +49,19 @@ func (collector *SolanaValidatorCollector) Collect(ch chan<- prometheus.Metric) 
 		go func(address string) {
 			defer wg.Done()
 			if rewards, err := collector.SolanaClient.GetInflationReward(address); err != nil {
-				ch <- prometheus.NewInvalidMetric(collector.ValidatorInflationReward, err)
+				ErrorGauge.WithLabelValues("get_validator_inflation_reward").Inc()
+				log.Print(err)
 			} else {
 				for _, reward := range rewards {
-					ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationRewardCurrentEpoch, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address)
-					ch <- prometheus.MustNewConstMetric(collector.ValidatorInflationReward, prometheus.GaugeValue, types.ConvertLamportToSolana(reward.Amount), address, strconv.FormatUint(reward.Epoch, 10))
+					ValidatorInflationRewardCurrentEpoch.WithLabelValues(address).Set(types.ConvertLamportToSolana(reward.Amount))
+					ValidatorInflationReward.WithLabelValues(address, strconv.FormatUint(reward.Epoch, 10)).Set(types.ConvertLamportToSolana(reward.Amount))
 				}
 			}
 			if delegators, err := collector.SolanaClient.GetDelegatorsCount(address); err != nil {
-				ch <- prometheus.NewInvalidMetric(collector.ValidatorDelegatorCount, err)
+				ErrorGauge.WithLabelValues("get_delegators_count").Inc()
+				log.Print(err)
 			} else {
-				ch <- prometheus.MustNewConstMetric(collector.ValidatorDelegatorCount, prometheus.GaugeValue, float64(len(delegators)), address)
+				ValidatorDelegatorCount.WithLabelValues(address).Set(float64(len(delegators)))
 			}
 		}(address)
 	}

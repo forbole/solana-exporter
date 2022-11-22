@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
+	"time"
 
 	"github.com/forbole/solana-exporter/collector"
 	"github.com/forbole/solana-exporter/types"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -34,19 +33,16 @@ var startCmd = &cobra.Command{
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		solanaClient := types.NewSolanaClient(config.Node.Address)
+		solanaCollector := collector.NewSolanaCollector(solanaClient, config.DelegatorAddresses, types.NewValidatorAddressesMap(config.ValidatorAddresses))
 
-		registry := prometheus.NewPedanticRegistry()
-		registry.MustRegister(
-			collector.NewSolanaValidatorCollector(solanaClient, types.NewValidatorAddressesMap(config.ValidatorAddresses)),
-			collector.NewSolanaDelegatorCollector(solanaClient, config.DelegatorAddresses),
-		)
+		go func() {
+			for {
+				solanaCollector.Collect()
+				time.Sleep(10 * time.Minute)
+			}
+		}()
 
-		handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{
-			ErrorLog:      log.New(os.Stderr, log.Prefix(), log.Flags()),
-			ErrorHandling: promhttp.ContinueOnError,
-		})
-
-		http.Handle("/metrics", handler)
+		http.Handle("/metrics", promhttp.Handler())
 		log.Fatal(http.ListenAndServe(config.Port, nil))
 		fmt.Printf("Start listening on port %s", config.Port)
 		return nil
